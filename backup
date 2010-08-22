@@ -1,0 +1,115 @@
+#!/bin/bash
+# Remote rotating snapshot backup. v1.1
+# George Sudarkoff <george@sudarkoff.com>
+#
+# This backup script maintains four hardlinked daily snapshots and four 
+# hardlinked monthly snapshot. Since only the difference between snapshots
+# is transfered and stored, the script is very efficient and therefore 
+# suitable to be executed on a daily basis.
+#
+
+unset PATH
+ID=/usr/bin/id
+HOSTNAME=/bin/hostname
+CAT=/bin/cat
+ECHO=/bin/echo
+DATE=/bin/date
+PING=/sbin/ping
+DRY_RUN=
+SSH=/usr/bin/ssh
+RSYNC=/usr/bin/rsync
+RSYNCOPTS="-e ssh --verbose --archive --update --delete --delete-excluded"
+
+# Default values for command line parameters
+HOST="localhost"
+REMOTE_USER=
+DEST="hosts/`$HOSTNAME -s`"
+EXCLUDES="/var/root/excludes"
+LEVEL=daily
+
+log () {
+    $ECHO "`$DATE \"+%Y-%m-%d %H:%M:%S\"` [$1] $2"
+}
+
+# make sure we're running as root
+if [ `$ID -u` -ne 0 ]; then
+    log "ERROR" "This script requires root privileges to run."
+    exit -1
+fi
+
+while getopts ":h:u:d:e:l:t" opt
+do
+    case $opt in
+        h ) HOST=$OPTARG;;
+        u ) REMOTE_USER=$OPTARG;;
+        d ) DEST=$OPTARG;;
+        e ) EXCLUDES=$OPTARG;;
+        l ) LEVEL=$OPTARG
+            if [[ "$LEVEL" != "daily" && "$LEVEL" != "monthly" ]]; then
+                log "ERROR" "Unsupported snapshot level '$LEVEL'."
+                exit 1
+            fi
+            ;;
+        t ) DRY_RUN=/bin/echo;;
+        * ) $ECHO "Usage: $0 \
+                [-h <host>] [-u <remote_user>] [-d <destination_dir>] \
+                [-e <excludes_file>] [-l <daily|monthly>] \
+                [-t] [<src> [...]]"
+            exit 1
+            ;;
+    esac
+done
+
+shift $(($OPTIND - 1))
+
+if [ "$1" = "" ]; then
+    # Default location that all Mac users should backup
+    SOURCE="/Users"
+else
+    SOURCE=$*
+fi
+
+if $DRY_RUN $PING -c 1 $HOST > /dev/null; then
+    REMOTE_HOST=$HOST
+    # Combine user name and host if user is specified
+    if [ "$REMOTE_USER" != "" ]; then
+        REMOTE_HOST=$REMOTE_USER@$HOST
+    fi
+
+    # Rotating snapshots
+    log "INFO" "Rotating $LEVEL snapshots."
+    $DRY_RUN $SSH $REMOTE_HOST "rm -rf $DEST/$LEVEL.3"
+    $DRY_RUN $SSH $REMOTE_HOST "mv $DEST/$LEVEL.2 $DEST/$LEVEL.3"
+    $DRY_RUN $SSH $REMOTE_HOST "mv $DEST/$LEVEL.1 $DEST/$LEVEL.2"
+    $DRY_RUN $SSH $REMOTE_HOST "mv $DEST/$LEVEL.0 $DEST/$LEVEL.1"
+
+    log "INFO" "Performing $LEVEL snapshot."
+    if [ "$LEVEL" = "daily" ]; then
+        log "INFO" "Creating remote snapshots directory if it doesn't exist."
+        $DRY_RUN $SSH $REMOTE_HOST "mkdir -p $DEST"
+        # rsync from the system into the latest snapshot (notice that rsync 
+        # behaves like cp --remove-destination by default, so the destination
+        # is unlinked first.  If it were not so, this would copy over the other
+        # snapshot(s) too!
+        log "INFO" "The following directories will be excluded from the snapshot:"
+        $CAT $EXCLUDES
+        for i in $SOURCE; do
+            log "INFO" "Processing '$i'"
+            $DRY_RUN $RSYNC $RSYNCOPTS --exclude-from="$EXCLUDES" \
+                --link-dest=../$LEVEL.1 $i $REMOTE_HOST:$DEST/$LEVEL.0/
+        done
+        # Updating the mtime of $LEVEL.0 to reflect the snapshot time
+        $DRY_RUN $SSH $REMOTE_HOST "touch $DEST/$LEVEL.0"
+    elif [ "$LEVEL" = "monthly" ]; then
+        # Making a hard-link-only copy of daily.0 into monthly.0
+        log "INFO" "Hard-linking daily.0 into monthly.0"
+        $DRY_RUN $SSH $REMOTE_HOST "cp -al $DEST/daily.0 $DEST/monthly.0"
+    fi
+
+    # And we're done
+    log "INFO" "Done!"
+else
+    # Host is unreachable
+    log "ERROR" "Host '$HOST' is unreachable!"
+    exit 2
+fi

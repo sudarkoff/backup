@@ -1,0 +1,32 @@
+#!/bin/bash
+
+ID=`which id`
+
+# make sure we're running under root
+if [ `$ID -u` -ne 0 ]; then
+    echo "ERROR: This script requires root privileges to run."
+    exit -1
+fi
+
+echo "Configuring backup script..."
+echo -n "Enter hostname of the backup server: "
+read -e HOSTNAME
+echo -n "Enter username for the backup server: "
+read -e USERNAME
+
+sed -e "s,@@HOSTNAME@@,$HOSTNAME,g" \
+    -e "s,@@USERNAME@@,$USERNAME,g" \
+    com.sudarkoff.backup.daily.tpl > com.sudarkoff.backup.daily.plist
+sed -e "s,@@HOSTNAME@@,$HOSTNAME,g" \
+    -e "s,@@USERNAME@@,$USERNAME,g" \
+    com.sudarkoff.backup.monthly.tpl > com.sudarkoff.backup.monthly.plist
+
+echo "Installing backup script..."
+mkdir -p /usr/local/bin
+cp ./backup /usr/local/bin/
+# do not override the original excludes file
+cp -n ./excludes /var/root/
+cp ./*.plist /Library/LaunchDaemons/
+launchctl load /Library/LaunchDaemons/com.sudarkoff.backup.*.plist
+
+echo "Done."

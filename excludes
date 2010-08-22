@@ -1,0 +1,10 @@
+/Users/Shared
+/Users/*/Downloads
+/Users/*/Movies
+/Users/*/Music
+/Users/*/Pictures
+*/.Trash
+.Spotlight-*
+*/Library/Caches
+*/Library/Logs
+*/Library/Mail/IMAP-*
